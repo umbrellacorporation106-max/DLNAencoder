@@ -1,0 +1,19 @@
+# Maintainer: Matthew H. <matthew.h@example.com>
+pkgname=dlnaencoder
+pkgver=2.0.0
+pkgrel=1
+pkgdesc="A sleek, batch video encoder dashboard for Arch Linux, optimized for DLNA/Roku compatibility."
+arch=('any')
+url="https://github.com/umbrellacorporation106-max/DLNAencoder"
+license=('MIT')
+depends=('python' 'python-psutil' 'ffmpeg' 'cpupower')
+source=("$pkgname-$pkgver.tar.gz::$url/archive/v$pkgver.tar.gz")
+sha256sums=('SKIP')
+
+package() {
+  # Install the script to /usr/bin
+  install -D -m755 "$srcdir/DLNAencoder-$pkgver/DLNAencoder.py" "$pkgdir/usr/bin/dlnaencoder"
+
+  # Install license
+  install -D -m644 "$srcdir/DLNAencoder-$pkgver/LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

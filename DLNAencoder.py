@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+
 import os
 import json
 import subprocess
@@ -22,6 +24,22 @@ CLR_SPEED = '\033[1;32m'    # Bold Green
 CLR_TEMP  = '\033[1;33m'    # Bold Yellow
 CLR_RESET = '\033[0m'
 CLR_ERR   = '\033[1;31m'    # Bold Red
+CLR_PAUSE = '\033[1;35m'    # Bold Magenta
+CLR_COMPLETE = '\033[1;32m' # Bold Green for complete status
+CLR_PENDING = '\033[1;33m'  # Bold Yellow for pending status
+
+# Define UI lines for consistent updates
+UI_HEADER_LINE = 1
+UI_DIVIDER_TOP_LINE = 2
+UI_OVERALL_PROG_LINE = 3
+UI_CURRENT_PROG_LINE = 4
+UI_DIVIDER_MID_LINE = 5
+UI_CPU_INFO_LINE = 6
+UI_GENERAL_STATUS_LINE = 7
+UI_INPUT_PROMPT_LINE = 8
+UI_DIVIDER_BOTTOM_LINE = 9
+UI_FILE_LIST_LABEL_LINE = 10
+UI_FILE_LIST_START_LINE = 11
 
 def setup_config():
     """Interactive setup for DLNAencoder configuration."""
@@ -56,7 +74,9 @@ def setup_config():
     
     with open(CONFIG_FILE, 'w') as f:
         json.dump(config, f, indent=4)
-    print(f"\n{CLR_SPEED}Configuration saved to {CONFIG_FILE}{CLR_RESET}\n")
+    print(f"
+{CLR_SPEED}Configuration saved to {CONFIG_FILE}{CLR_RESET}
+")
     return config
 
 def load_config():
@@ -89,6 +109,12 @@ args = parser.parse_args()
 
 target_path = os.path.abspath(args.path)
 
+# --- Global State Variables ---
+STOP_REQUESTED = False
+PAUSED = False
+ORIGINAL_CPU_MAX = None
+FILE_STATUSES = [] # To store list of files and their statuses
+
 # --- File Scanning Logic ---
 def scan_files(path):
     found = []
@@ -107,28 +133,36 @@ def scan_files(path):
 files = scan_files(target_path)
 total = len(files)
 count = 0
-STOP_REQUESTED = False
-ORIGINAL_CPU_MAX = None
+
+def update_status_line(line_num, message, color=CLR_RESET):
+    """Updates a specific line in the terminal with a message."""
+    # Ensure no newline, just update the current line.
+    print(f"\033[{line_num};1H\033[K {color}{message}{CLR_RESET}", end='', flush=True)
 
 def timed_input(prompt, timeout=300):
     """Wait for input with a countdown, defaults to 'y' on timeout."""
     start_time = time.time()
+    update_status_line(UI_GENERAL_STATUS_LINE, "STATUS: Waiting for user input...", CLR_LABEL)
     print('\033[?25h', end='') # Show cursor
     while True:
         elapsed = time.time() - start_time
         remaining = int(timeout - elapsed)
         if remaining <= 0:
-            print(f"\033[8;1H\033[K {CLR_LABEL}Timeout reached. Proceeding...{CLR_RESET}")
+            update_status_line(UI_INPUT_PROMPT_LINE, f"Timeout reached. Proceeding...", CLR_LABEL)
+            time.sleep(1) # Let user see the timeout message
+            update_status_line(UI_INPUT_PROMPT_LINE, "") # Clear prompt line
             return 'y'
         
-        print(f"\033[8;1H\033[K {CLR_LABEL}{prompt}{CLR_RESET} ({remaining}s) [Y/n]: ", end='', flush=True)
+        update_status_line(UI_INPUT_PROMPT_LINE, f"{prompt} ({remaining}s) [Y/n]: ", CLR_LABEL)
         
         rlist, _, _ = select.select([sys.stdin], [], [], 1)
         if rlist:
             res = sys.stdin.readline().strip().lower()
+            update_status_line(UI_INPUT_PROMPT_LINE, "") # Clear prompt line
             return res if res else 'y'
         
         if STOP_REQUESTED:
+            update_status_line(UI_INPUT_PROMPT_LINE, "") # Clear prompt line
             return 'n'
 
 def get_cpu_max_freq():
@@ -200,30 +234,53 @@ if total == 0:
     print(f"{CLR_LABEL}SCAN COMPLETE:{CLR_VAL} No files needing encoding found in {target_path}.")
     exit(0)
 
+# Initial file list display before starting the dashboard
 print(f"{CLR_LABEL}FOUND {total} FILES IN {target_path}:{CLR_RESET}")
 for f in files:
     print(f"  • {os.path.basename(f)}")
 
-if input(f"\n{CLR_LABEL}Start batch encoding?{CLR_RESET} (y/n): ").lower() != 'y':
+if input(f"
+{CLR_LABEL}Start batch encoding?{CLR_RESET} (y/n): ").lower() != 'y':
     print("Exiting.")
     exit(0)
 
+# Clear screen, hide cursor, print initial static UI elements
 print('\033[2J\033[H\033[?25l', end='')
-print(f"{CLR_HDR}  DLNAencoder DASHBOARD (Omarchy Support)  {CLR_RESET}")
-print("-" * 65)
+update_status_line(UI_HEADER_LINE, f"  DLNAencoder DASHBOARD (Omarchy Support)  ", CLR_HDR)
+update_status_line(UI_DIVIDER_TOP_LINE, "-" * 65)
+update_status_line(UI_DIVIDER_MID_LINE, "-" * 65)
+update_status_line(UI_DIVIDER_BOTTOM_LINE, "-" * 65)
+
+# Initialize FILE_STATUSES and display the active list
+update_status_line(UI_FILE_LIST_LABEL_LINE, "Active Files:", color=CLR_LABEL)
+for i, file_path in enumerate(files):
+    display_name = os.path.basename(file_path)
+    # Add an entry to FILE_STATUSES with the line number it will occupy
+    FILE_STATUSES.append({
+        'path': file_path,
+        'status': 'Pending',
+        'line_num': UI_FILE_LIST_START_LINE + i
+    })
+    update_status_line(FILE_STATUSES[-1]['line_num'], f"  [{CLR_PENDING}Pending{CLR_RESET}] {display_name}")
 
 if CPU_THROTTLE_ENABLED:
     ORIGINAL_CPU_MAX = get_cpu_max_freq()
     if ORIGINAL_CPU_MAX:
-        print(f"\033[7;1H\033[K {CLR_LABEL}STATUS:{CLR_RESET} Initializing CPU Throttle ({CPU_LIMIT_GHZ}GHz)...")
+        update_status_line(UI_GENERAL_STATUS_LINE, f"STATUS: Initializing CPU Throttle ({CPU_LIMIT_GHZ}GHz)...", CLR_LABEL)
         set_cpu_limit(CPU_LIMIT_GHZ)
+        time.sleep(1) # Give a moment for the message to be seen
+
+update_status_line(UI_INPUT_PROMPT_LINE, "Press 'p' to pause/resume encoding.", CLR_LABEL)
+
+process = None # Initialize process to None for finally block safety
 
 try:
-    for file_path in files:
+    for i, file_entry in enumerate(FILE_STATUSES): # Iterate through FILE_STATUSES to get line_num
         if STOP_REQUESTED:
             break
         
         count += 1
+        file_path = file_entry['path']
         filename = os.path.basename(file_path)
         file_dir = os.path.dirname(file_path)
         temp_out = os.path.join(TEMP_DIR, f'{os.path.splitext(filename)[0]}_tmp.mp4')
@@ -233,7 +290,7 @@ try:
             duration_sec = float(subprocess.check_output(['ffprobe', '-v', 'error', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', file_path]))
             duration_us = int(duration_sec * 1000000)
         except Exception:
-            print(f'\033[7;1H\033[K{CLR_ERR}ERROR:{CLR_RESET} ffprobe failed for {filename}')
+            update_status_line(UI_GENERAL_STATUS_LINE, f"{CLR_ERR}ERROR:{CLR_RESET} ffprobe failed for {filename}", CLR_ERR)
             continue
 
         ffmpeg_cmd = [
@@ -247,14 +304,36 @@ try:
         ]
         
         if os.path.exists(PROGRESS_FILE): os.remove(PROGRESS_FILE)
-            
+        
         process = subprocess.Popen(ffmpeg_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        update_status_line(UI_GENERAL_STATUS_LINE, "STATUS: Running encoding...", CLR_LABEL)
 
         while process.poll() is None:
             if STOP_REQUESTED:
-                process.terminate()
+                if not PAUSED: # Only terminate if not already paused
+                    process.terminate()
                 break
             
+            # Check for pause/resume input
+            rlist, _, _ = select.select([sys.stdin], [], [], 0) # Non-blocking check
+            if rlist:
+                key = sys.stdin.readline().strip().lower()
+                if key == 'p':
+                    global PAUSED
+                    PAUSED = not PAUSED
+                    if PAUSED:
+                        process.send_signal(signal.SIGSTOP)
+                        update_status_line(UI_GENERAL_STATUS_LINE, "STATUS: Paused. Press 'p' to resume.", CLR_PAUSE)
+                        update_status_line(UI_INPUT_PROMPT_LINE, "", CLR_RESET) # Clear input prompt line
+                    else:
+                        process.send_signal(signal.SIGCONT)
+                        update_status_line(UI_GENERAL_STATUS_LINE, "STATUS: Resumed. Running encoding...", CLR_LABEL)
+                        update_status_line(UI_INPUT_PROMPT_LINE, "Press 'p' to pause/resume encoding.", CLR_LABEL)
+            
+            if PAUSED:
+                time.sleep(0.1) # Shorter sleep when paused to be responsive to 'p'
+                continue
+
             out_time_us = 0
             speed_str = '0.00x'
             speed_float = 0.0
@@ -284,39 +363,49 @@ try:
 
             display_name = filename if len(filename) < 25 else filename[:22] + "..."
             
-            print(f"\033[3;1H\033[K {CLR_LABEL}OVERALL {CLR_RESET} {draw_bar(overall_p, f'({count}/{total})')}")
-            print(f"\033[4;1H\033[K {CLR_LABEL}CURRENT {CLR_RESET} {draw_bar(current_p, f'({display_name})')}")
-            print("-" * 65)
-            print(f"\033[6;1H\033[K {CLR_LABEL}SPEED:{CLR_VAL} {CLR_SPEED}{speed_str:<7}{CLR_RESET} | {CLR_LABEL}CPU:{CLR_VAL} {freq:.2f}GHz | {CLR_LABEL}TEMP:{CLR_VAL} {CLR_TEMP}{temp:.1f}°C{CLR_RESET} | {CLR_LABEL}ETA:{CLR_VAL} {eta_str}")
+            update_status_line(UI_OVERALL_PROG_LINE, f"{CLR_LABEL}OVERALL {CLR_RESET} {draw_bar(overall_p, f'({count}/{total})')}")
+            update_status_line(UI_CURRENT_PROG_LINE, f"{CLR_LABEL}CURRENT {CLR_RESET} {draw_bar(current_p, f'({display_name})')}")
+            update_status_line(UI_CPU_INFO_LINE, f"{CLR_LABEL}SPEED:{CLR_VAL} {CLR_SPEED}{speed_str:<7}{CLR_RESET} | {CLR_LABEL}CPU:{CLR_VAL} {freq:.2f}GHz | {CLR_LABEL}TEMP:{CLR_VAL} {CLR_TEMP}{temp:.1f}°C{CLR_RESET} | {CLR_LABEL}ETA:{CLR_VAL} {eta_str}")
             
             time.sleep(1)
 
-        process.wait()
+        process.wait() # Wait for the process to fully exit if it wasn't terminated
         
         if not STOP_REQUESTED:
             if verify_integrity(temp_out):
                 if os.path.exists(file_path): os.remove(file_path)
                 if os.path.exists(temp_out): shutil.move(temp_out, final_out)
+                # Update status in FILE_STATUSES and redraw the line
+                FILE_STATUSES[i]['status'] = 'Completed'
+                display_name = os.path.basename(FILE_STATUSES[i]['path'])
+                update_status_line(FILE_STATUSES[i]['line_num'], f"  [{CLR_COMPLETE}Completed{CLR_RESET}] {display_name}")
             else:
-                print(f'\033[7;1H\033[K{CLR_ERR}CRITICAL ERROR:{CLR_RESET} Integrity check failed for {filename}.')
+                update_status_line(UI_GENERAL_STATUS_LINE, f"{CLR_ERR}CRITICAL ERROR:{CLR_RESET} Integrity check failed for {filename}.", CLR_ERR)
                 if os.path.exists(temp_out): os.remove(temp_out)
                 STOP_REQUESTED = True
                 break
             
             if count < total:
-                if timed_input(f"Batch progress: {count}/{total} complete. Continue?", timeout=300) == 'n':
+                # Clear existing pause message before timed_input prompt
+                update_status_line(UI_INPUT_PROMPT_LINE, "") 
+                res = timed_input(f"Batch progress: {count}/{total} complete. Continue?", timeout=300)
+                if res == 'n':
                     STOP_REQUESTED = True
                     break
-                print('\033[?25l', end='')
+                # Restore pause hint after timed_input
+                update_status_line(UI_INPUT_PROMPT_LINE, "Press 'p' to pause/resume encoding.", CLR_LABEL)
         else:
             if os.path.exists(temp_out): os.remove(temp_out)
             break
 
 finally:
+    # Ensure any paused process is resumed before exit to avoid orphaned processes
+    if PAUSED and process and process.poll() is None:
+        process.send_signal(signal.SIGCONT)
     if ORIGINAL_CPU_MAX:
-        print(f"\033[8;1H\033[K {CLR_LABEL}STATUS:{CLR_RESET} Restoring CPU speed...")
+        update_status_line(UI_GENERAL_STATUS_LINE, "STATUS: Restoring CPU speed...", CLR_LABEL)
         restore_cpu_limit(ORIGINAL_CPU_MAX)
-    print('\033[?25h')
+    print(f'\033[999;1H\033[?25h') # Move cursor to bottom, show cursor
     if STOP_REQUESTED:
         print(f'\n{CLR_ERR}Encoding cancelled by user.{CLR_RESET}')
     else:

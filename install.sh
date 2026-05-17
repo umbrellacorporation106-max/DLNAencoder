@@ -23,14 +23,31 @@ if [ ${#missing_deps[@]} -ne 0 ]; then
     exit 1
 fi
 
-if ! python3 -c "import psutil" &> /dev/null; then
-    echo "Error: python3 'psutil' library is not available."
+if ! python3 -c "import psutil, curses" &> /dev/null; then
+    echo "Error: Required python3 libraries ('psutil', 'curses') are not available."
     exit 1
 fi
 
 echo "Dependencies satisfied."
 
-# 2. Directory Setup
+# 2a. Add NOPASSWD for cpupower to sudoers (if not already present)
+# WARNING: Modifying /etc/sudoers incorrectly can lock you out of sudo.
+# This script bypasses visudo for automation, use with caution.
+CURRENT_USER=$(whoami)
+SUDOERS_LINE="$CURRENT_USER ALL=(ALL) NOPASSWD: /usr/bin/cpupower"
+SUDOERS_FILE="/etc/sudoers"
+
+echo "Checking sudoers for cpupower NOPASSWD entry..."
+if ! sudo grep -qF "$SUDOERS_LINE" "$SUDOERS_FILE"; then
+    echo "Adding NOPASSWD entry for cpupower to $SUDOERS_FILE for user $CURRENT_USER."
+    echo "This allows DLNAencoder to set CPU frequency without password prompts."
+    echo "$SUDOERS_LINE" | sudo tee -a "$SUDOERS_FILE" > /dev/null
+    echo "Sudoers entry added. You may need to restart your terminal for changes to take effect."
+else
+    echo "NOPASSWD entry for cpupower already exists for user $CURRENT_USER."
+fi
+
+# 2b. Directory Setup
 echo "Setting up directories..."
 mkdir -p "$HOME/.local/bin"
 mkdir -p "$HOME/.config/DLNAencoder"

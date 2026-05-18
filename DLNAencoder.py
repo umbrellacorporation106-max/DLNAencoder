@@ -11,9 +11,35 @@ import shutil
 from datetime import timedelta
 
 # --- Configuration ---
-VERSION = "2.0.1"
+VERSION = "2.0.2"
 CONFIG_DIR = os.path.expanduser('~/.config/DLNAencoder')
 CONFIG_FILE = os.path.join(CONFIG_DIR, 'config.json')
+
+def get_cpu_max_freq():
+    """Reads the current scaling maximum frequency in KHz."""
+    try:
+        with open('/sys/devices/system/cpu/cpu0/cpufreq/scaling_max_freq', 'r') as f:
+            return int(f.read().strip())
+    except:
+        return None
+
+def set_cpu_limit(freq_ghz):
+    """Sets the CPU maximum frequency limit using cpupower."""
+    try:
+        subprocess.run(['sudo', 'cpupower', 'frequency-set', '-u', f"{freq_ghz}GHz"], 
+                       check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except:
+        pass
+
+def restore_cpu_limit(freq_khz):
+    """Restores the CPU maximum frequency limit using the original KHz value."""
+    if freq_khz:
+        freq_ghz = freq_khz / 1000000
+        try:
+            subprocess.run(['sudo', 'cpupower', 'frequency-set', '-u', f"{freq_ghz}GHz"], 
+                           check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except:
+            pass
 
 def load_config():
     os.makedirs(CONFIG_DIR, exist_ok=True)
@@ -21,17 +47,23 @@ def load_config():
         config = {
             "input_dir": os.path.expanduser('~/Videos'),
             "temp_dir": os.path.expanduser('~/DLNAencoder_temp'),
-            "cpu_limit_ghz": 1.2
+            "cpu_limit_ghz": 1.2,
+            "cpu_throttling_enabled": True
         }
         with open(CONFIG_FILE, 'w') as f:
             json.dump(config, f, indent=4)
         return config
     with open(CONFIG_FILE, 'r') as f:
-        return json.load(f)
+        cfg = json.load(f)
+        if "cpu_throttling_enabled" not in cfg:
+            cfg["cpu_throttling_enabled"] = True
+        return cfg
 
 config = load_config()
 INPUT_DIR = config['input_dir']
 TEMP_DIR = config['temp_dir']
+CPU_LIMIT_GHZ = config.get('cpu_limit_ghz', 1.2)
+CPU_THROTTLE_ENABLED = config.get('cpu_throttling_enabled', True)
 PROGRESS_FILE = os.path.join(TEMP_DIR, 'ffmpeg_progress.txt')
 os.makedirs(TEMP_DIR, exist_ok=True)
 
@@ -46,6 +78,12 @@ class EncoderApp:
         self.process = None
         self.file_statuses = [{'path': f, 'status': 'Pending', 'duration': 0} for f in self.files]
         self.progress_data = {'progress': 0, 'eta': 'N/A', 'speed': 'N/A'}
+        
+        # CPU Throttling initialization
+        self.original_cpu_max = None
+        if CPU_THROTTLE_ENABLED:
+            self.original_cpu_max = get_cpu_max_freq()
+            set_cpu_limit(CPU_LIMIT_GHZ)
         
         curses.curs_set(0)
         self.stdscr.nodelay(True)
@@ -158,29 +196,37 @@ class EncoderApp:
         self.stdscr.refresh()
 
     def run(self):
-        curses.start_color()
-        curses.init_pair(1, curses.COLOR_GREEN, curses.COLOR_BLACK)
-        curses.init_pair(2, curses.COLOR_YELLOW, curses.COLOR_BLACK)
-        curses.init_pair(3, curses.COLOR_BLUE, curses.COLOR_BLACK)
-        
-        while self.running:
-            key = self.stdscr.getch()
-            if key == ord('q'):
-                self.running = False
-            elif key == ord('p'):
-                self.paused = True
-                if self.process: self.process.send_signal(signal.SIGSTOP)
-            elif key == ord('r'):
-                self.paused = False
-                if self.process: self.process.send_signal(signal.SIGCONT)
+        try:
+            curses.start_color()
+            curses.init_pair(1, curses.COLOR_GREEN, curses.COLOR_BLACK)
+            curses.init_pair(2, curses.COLOR_YELLOW, curses.COLOR_BLACK)
+            curses.init_pair(3, curses.COLOR_BLUE, curses.COLOR_BLACK)
+            
+            while self.running:
+                key = self.stdscr.getch()
+                if key == ord('q'):
+                    self.running = False
+                elif key == ord('p'):
+                    self.paused = True
+                    if self.process: self.process.send_signal(signal.SIGSTOP)
+                elif key == ord('r'):
+                    self.paused = False
+                    if self.process: self.process.send_signal(signal.SIGCONT)
+                    
+                if not self.paused and self.current_idx < self.total_files:
+                    self.process_file()
                 
-            if not self.paused and self.current_idx < self.total_files:
-                self.process_file()
-            
-            self.draw()
-            time.sleep(0.1)
-            
-        if self.process: self.process.kill()
+                self.draw()
+                time.sleep(0.1)
+        finally:
+            if self.process:
+                try:
+                    self.process.kill()
+                except:
+                    pass
+            # Restore CPU limit on exit
+            if CPU_THROTTLE_ENABLED:
+                restore_cpu_limit(self.original_cpu_max)
 
     def process_file(self):
         file_path = self.file_statuses[self.current_idx]['path']

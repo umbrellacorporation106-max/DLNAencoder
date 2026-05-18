@@ -16,7 +16,3 @@ All notable changes to this project will be documented in this file.
 - **Process Management**: Enhanced child process handling for aggressive, clean termination on exit or interrupt.
 - **FFmpeg Silence**: Fully redirected process output for a clean terminal environment.
 - **Installation Automation**: Automated sudoers configuration for `cpupower` within `install.sh`.
-
-## [2.0.2] - 2026-05-18
-### Fixed
-- **CPU Throttling**: Restored missing logic for CPU frequency limiting and automatic restoration on exit.

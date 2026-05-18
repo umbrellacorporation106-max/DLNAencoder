@@ -2,11 +2,6 @@
 
 All notable changes to this project will be documented in this file.
 
-## [2.0.1] - 2026-05-17
-### Fixed
-- **Finalization Bug**: Restored missing logic to move encoded files to destination and remove original source files.
-- **Collision Prevention**: Added unique temporary filenames to prevent file collisions during encoding.
-
 ## [2.0.0] - 2026-05-16
 ### Added
 - **Curses Dashboard**: Completely refactored UI for a robust, stable terminal dashboard.

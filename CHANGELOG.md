@@ -20,3 +20,12 @@ All notable changes to this project will be documented in this file.
 ## [2.0.2] - 2026-05-18
 ### Fixed
 - **CPU Throttling**: Restored missing logic for CPU frequency limiting and automatic restoration on exit.
+
+## [2.1.0] - 2026-05-18
+### Added
+- **Interactive Selection State**: New startup screen allows checking/unchecking files with spacebar.
+- **Manual File Addition ('a')**: Hotkey to manually add specific files or directories to the queue.
+- **Dynamic Configuration ('c')**: Change and persist the default input directory directly from the dashboard.
+- **Live CPU Toggle ('t')**: Switch between throttled and full CPU speed during runtime.
+- **UI Enhancements**: Added version tag v2.1.0 to header and improved layout spacing.
+- **State Management**: Distinct SELECTING, ENCODING, and FINISHED states for better user feedback.

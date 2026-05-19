@@ -11,7 +11,7 @@ import shutil
 from datetime import timedelta
 
 # --- Configuration ---
-VERSION = "2.1.0"
+VERSION = "2.2.0"
 CONFIG_DIR = os.path.expanduser('~/.config/DLNAencoder')
 CONFIG_FILE = os.path.join(CONFIG_DIR, 'config.json')
 
@@ -90,6 +90,7 @@ class EncoderApp:
         self.progress_data = {'progress': 0, 'eta': 'N/A', 'speed': 'N/A'}
         self.cpu_throttle_enabled = CPU_THROTTLE_ENABLED
         self.original_cpu_max = get_cpu_max_freq()
+        self.show_help = False
         
         if self.cpu_throttle_enabled:
             set_cpu_limit(CPU_LIMIT_GHZ)
@@ -183,6 +184,40 @@ class EncoderApp:
         else:
             restore_cpu_limit(self.original_cpu_max)
 
+    def draw_help_screen(self):
+        h, w = self.stdscr.getmaxyx()
+        box_h, box_w = 16, 60
+        start_y, start_x = (h - box_h) // 2, (w - box_w) // 2
+        
+        # Background "shadow" or just clear area
+        for i in range(box_h):
+            self.stdscr.addstr(start_y + i, start_x, " " * box_w, curses.A_REVERSE)
+        
+        self.stdscr.addstr(start_y + 1, start_x + 2, "--- DLNAencoder Controls ---", curses.A_REVERSE | curses.A_BOLD)
+        
+        controls = [
+            ("Global:", ""),
+            ("  q", "Quit"),
+            ("  h", "Toggle Help"),
+            ("  t", "Toggle CPU Throttle"),
+            ("", ""),
+            ("Selection:", ""),
+            ("  Arrows", "Navigate Files"),
+            ("  Space", "Toggle Selection"),
+            ("  a / c", "Add Path / Change Dir"),
+            ("  Enter", "Start Encoding"),
+            ("", ""),
+            ("Encoding:", ""),
+            ("  p / r", "Pause / Resume"),
+            ("  m", "Return to Menu (when finished)")
+        ]
+        
+        for i, (key, desc) in enumerate(controls):
+            if i + 3 < box_h:
+                self.stdscr.addstr(start_y + 3 + i, start_x + 4, f"{key:<10} {desc}", curses.A_REVERSE)
+        
+        self.stdscr.addstr(start_y + box_h - 2, start_x + 2, "Press 'h' to close", curses.A_REVERSE | curses.A_ITALIC)
+
     def draw(self):
         self.stdscr.erase()
         h, w = self.stdscr.getmaxyx()
@@ -210,7 +245,7 @@ class EncoderApp:
                 self.stdscr.addstr(y, 2, f"{cursor}{checked} {os.path.basename(entry['path'])}")
                 y += 1
             
-            self.stdscr.addstr(h-1, 0, " 'a' Add File | 'c' Change Dir | 't' Toggle Throttle | Enter Start | 'q' Quit ", curses.A_REVERSE)
+            self.stdscr.addstr(h-1, 0, " 'a' Add File | 'c' Change Dir | 't' Toggle Throttle | 'h' Help | Enter Start | 'q' Quit ", curses.A_REVERSE)
 
         elif self.state in [STATE_ENCODING, STATE_FINISHED]:
             # System Metrics
@@ -249,7 +284,13 @@ class EncoderApp:
                 self.stdscr.addstr(y, 4, f"[{entry['status']}] {os.path.basename(entry['path'])}", color)
                 y += 1
             
-            self.stdscr.addstr(h-1, 0, " 'p' Pause | 'r' Resume | 't' Toggle Throttle | 'q' Quit ", curses.A_REVERSE)
+            if self.state == STATE_ENCODING:
+                self.stdscr.addstr(h-1, 0, " 'p' Pause | 'r' Resume | 't' Toggle Throttle | 'h' Help | 'q' Quit ", curses.A_REVERSE)
+            else:
+                self.stdscr.addstr(h-1, 0, " 'm' Menu | 't' Toggle Throttle | 'h' Help | 'q' Quit ", curses.A_REVERSE)
+
+        if self.show_help:
+            self.draw_help_screen()
 
         self.stdscr.refresh()
 
@@ -262,10 +303,14 @@ class EncoderApp:
             
             while self.running:
                 key = self.stdscr.getch()
+                
+                # Global Controls
                 if key == ord('q'):
                     self.running = False
                 elif key == ord('t'):
                     self.toggle_throttle()
+                elif key == ord('h'):
+                    self.show_help = not self.show_help
                 
                 if self.state == STATE_SELECTING:
                     if key == curses.KEY_UP:
@@ -291,6 +336,7 @@ class EncoderApp:
                             self.files = self.scan_files(self.input_dir)
                             self.file_statuses = [{'path': f, 'status': 'Pending', 'duration': 0, 'selected': True} for f in self.files]
                             self.cursor_idx = 0
+                            self.current_idx = 0
                     elif key in [10, 13]: # Enter
                         selected_files = [f for f in self.file_statuses if f['selected']]
                         if selected_files:
@@ -311,6 +357,16 @@ class EncoderApp:
                     elif self.current_idx >= len(self.file_statuses):
                         self.state = STATE_FINISHED
                 
+                elif self.state == STATE_FINISHED:
+                    if key == ord('m'):
+                        self.state = STATE_SELECTING
+                        # Re-scan and preserve status for display? No, reset for new batch
+                        self.files = self.scan_files(self.input_dir)
+                        self.file_statuses = [{'path': f, 'status': 'Pending', 'duration': 0, 'selected': True} for f in self.files]
+                        self.current_idx = 0
+                        self.cursor_idx = 0
+                        self.progress_data = {'progress': 0, 'eta': 'N/A', 'speed': 'N/A'}
+
                 self.draw()
                 time.sleep(0.1)
         finally:

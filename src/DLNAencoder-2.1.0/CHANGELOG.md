@@ -21,16 +21,6 @@ All notable changes to this project will be documented in this file.
 ### Fixed
 - **CPU Throttling**: Restored missing logic for CPU frequency limiting and automatic restoration on exit.
 
-## [2.2.0] - 2026-05-19
-### Added
-- **Interactive Help Screen ('h')**: A new overlay accessible in any state that lists all available controls and hotkeys.
-- **Return to Selection Menu ('m')**: New hotkey available in the FINISHED state to re-scan the input directory and start a new batch without restarting the program.
-- **Improved State Transitions**: Refined the flow between SELECTING, ENCODING, and FINISHED states for better reliability.
-
-### Fixed
-- **Selection Persistence**: Fixed a bug where deselected files were still being processed in the encoding queue.
-- **UI Footers**: Added missing 'h' and 'm' hints to the status bar for better discoverability.
-
 ## [2.1.0] - 2026-05-18
 ### Added
 - **Interactive Selection State**: New startup screen allows checking/unchecking files with spacebar.

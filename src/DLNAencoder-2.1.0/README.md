@@ -14,24 +14,20 @@ A professional, batch video encoder dashboard for Arch Linux, optimized for DLNA
 
 ## Controls
 
-### Global
-- **'h'**: Toggle the interactive Help Screen (overlay).
-- **'t'**: Toggle CPU throttling (on/off).
-- **'q'**: Quit the application.
-
 ### Selection Screen
 - **Up/Down Arrows**: Navigate the file list.
 - **Spacebar**: Toggle file selection `[X]`.
 - **'a'**: Manually add a file or directory path.
 - **'c'**: Change the default input directory (saved to config).
+- **'t'**: Toggle CPU throttling (on/off).
 - **Enter**: Start encoding selected files.
+- **'q'**: Quit the application.
 
 ### Encoding Dashboard
 - **'p'**: Pause encoding.
 - **'r'**: Resume encoding.
-
-### Finished Screen
-- **'m'**: Return to Selection Menu (re-scans directory).
+- **'t'**: Toggle CPU throttling (on/off).
+- **'q'**: Quit and stop current encoding (graceful cleanup).
 
 ## Installation
 

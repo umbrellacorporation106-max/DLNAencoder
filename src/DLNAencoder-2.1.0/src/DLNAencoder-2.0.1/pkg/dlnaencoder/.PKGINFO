@@ -3,12 +3,12 @@
 pkgname = dlnaencoder
 pkgbase = dlnaencoder
 xdata = pkgtype=pkg
-pkgver = 2.1.0-1
+pkgver = 2.0.0-1
 pkgdesc = A sleek, batch video encoder dashboard for Arch Linux, optimized for DLNA/Roku compatibility.
 url = https://github.com/umbrellacorporation106-max/DLNAencoder
-builddate = 1779101539
+builddate = 1778987921
 packager = Unknown Packager
-size = 16823
+size = 17871
 arch = any
 license = MIT
 depend = python

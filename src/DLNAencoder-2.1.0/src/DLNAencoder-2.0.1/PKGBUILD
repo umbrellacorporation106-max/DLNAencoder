@@ -1,6 +1,6 @@
 # Maintainer: Matthew H. <matthew.h@example.com>
 pkgname=dlnaencoder
-pkgver=2.2.0
+pkgver=2.0.1
 pkgrel=1
 pkgdesc="A sleek, batch video encoder dashboard for Arch Linux, optimized for DLNA/Roku compatibility."
 arch=('any')

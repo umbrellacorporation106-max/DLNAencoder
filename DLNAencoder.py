@@ -288,6 +288,7 @@ class EncoderApp:
             ("Global:", ""),
             ("  q", "Quit"),
             ("  h", "Toggle Help"),
+            ("  l", "View Error Logs"),
             ("  t", "Toggle CPU Throttle"),
             ("", ""),
             ("Selection:", ""),

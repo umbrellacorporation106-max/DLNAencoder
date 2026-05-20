@@ -24,6 +24,7 @@ A professional, batch video encoder dashboard for Arch Linux, optimized for DLNA
 - **Spacebar**: Toggle file selection `[X]`.
 - **'a'**: Manually add a file or directory path.
 - **'c'**: Change the default input directory (saved to config).
+- **'s'**: Set custom throttle speed (GHz).
 - **Enter**: Start encoding selected files.
 
 ### Encoding Dashboard

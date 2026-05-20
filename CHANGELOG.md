@@ -21,6 +21,14 @@ All notable changes to this project will be documented in this file.
 ### Fixed
 - **CPU Throttling**: Restored missing logic for CPU frequency limiting and automatic restoration on exit.
 
+## [2.2.1] - 2026-05-19
+### Fixed
+- **CPU Throttle Management**: Refactored throttle logic to apply frequency limits without forcing specific governors, preventing conflicts with existing system power states.
+- **UI Persistence**: Resolved UI collision issue where summary message obscured metrics, and ensured robust summary rendering.
+- **Encoding Queue**: Fixed regression in file selection logic ensuring only checked files are processed.
+- **Session Persistence**: Implemented 'Interruption Memory' to save batch results to disk after force-quits.
+- **Throttle Toggle Crash**: Implemented asynchronous thread-based execution for CPU frequency commands to prevent UI freezes.
+
 ## [2.2.0] - 2026-05-19
 ### Added
 - **Interactive Help Screen ('h')**: A new overlay accessible in any state that lists all available controls and hotkeys.

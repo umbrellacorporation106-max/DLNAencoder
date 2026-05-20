@@ -11,9 +11,10 @@ import shutil
 from datetime import timedelta
 
 # --- Configuration ---
-VERSION = "2.2.0"
+VERSION = "2.2.1"
 CONFIG_DIR = os.path.expanduser('~/.config/DLNAencoder')
 CONFIG_FILE = os.path.join(CONFIG_DIR, 'config.json')
+LAST_RUN_FILE = os.path.join(CONFIG_DIR, 'last_run.json')
 
 def get_cpu_max_freq():
     """Reads the hardware maximum frequency in KHz."""
@@ -23,23 +24,48 @@ def get_cpu_max_freq():
     except:
         return None
 
-def set_cpu_limit(freq_ghz):
-    """Sets the CPU maximum frequency limit using cpupower."""
+def get_cpu_governor():
+    """Reads the current CPU governor."""
     try:
-        subprocess.run(['sudo', 'cpupower', 'frequency-set', '-u', f"{freq_ghz}GHz"], 
-                       check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        with open('/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor', 'r') as f:
+            return f.read().strip()
     except:
-        pass
+        return None
 
-def restore_cpu_limit(freq_khz):
-    """Restores the CPU maximum frequency limit using the original KHz value."""
+import threading
+
+def run_cmd_async(cmd):
+    """Run command in background to keep UI responsive."""
+    def target():
+        try:
+            subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception:
+            pass
+    threading.Thread(target=target, daemon=True).start()
+
+def set_cpu_throttle(freq_ghz):
+    """Limits frequency without forcing a specific governor."""
+    run_cmd_async(['sudo', 'cpupower', 'frequency-set', '-u', f"{freq_ghz}GHz"])
+
+def set_cpu_full_speed(freq_khz):
+    """Sets governor to performance and resets frequency limit."""
     if freq_khz:
         freq_ghz = freq_khz / 1000000
-        try:
-            subprocess.run(['sudo', 'cpupower', 'frequency-set', '-u', f"{freq_ghz}GHz"], 
-                           check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        except:
-            pass
+        run_cmd_async(['sudo', 'cpupower', 'frequency-set', '-u', f"{freq_ghz}GHz"])
+    run_cmd_async(['sudo', 'cpupower', 'frequency-set', '-g', 'performance'])
+
+def restore_cpu_state(governor, freq_khz):
+    """Restores the original governor and frequency limit."""
+    try:
+        # Restore frequency limit first
+        if freq_khz:
+            freq_ghz = freq_khz / 1000000
+            subprocess.run(['sudo', 'cpupower', 'frequency-set', '-u', f"{freq_ghz}GHz"], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        # Then restore original governor
+        if governor:
+            subprocess.run(['sudo', 'cpupower', 'frequency-set', '-g', governor], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except:
+        pass
 
 def load_config():
     os.makedirs(CONFIG_DIR, exist_ok=True)
@@ -47,7 +73,7 @@ def load_config():
         config = {
             "input_dir": os.path.expanduser('~/Videos'),
             "temp_dir": os.path.expanduser('~/DLNAencoder_temp'),
-            "cpu_limit_ghz": 1.2,
+            "cpu_limit_ghz": 1.8, # Increased default to 1.8GHz for better balance
             "cpu_throttling_enabled": True
         }
         with open(CONFIG_FILE, 'w') as f:
@@ -55,6 +81,8 @@ def load_config():
         return config
     with open(CONFIG_FILE, 'r') as f:
         cfg = json.load(f)
+        if "cpu_limit_ghz" not in cfg:
+            cfg["cpu_limit_ghz"] = 1.8
         if "cpu_throttling_enabled" not in cfg:
             cfg["cpu_throttling_enabled"] = True
         return cfg
@@ -89,11 +117,22 @@ class EncoderApp:
         self.process = None
         self.progress_data = {'progress': 0, 'eta': 'N/A', 'speed': 'N/A'}
         self.cpu_throttle_enabled = CPU_THROTTLE_ENABLED
+        self.cpu_throttle_ghz = CPU_LIMIT_GHZ
         self.original_cpu_max = get_cpu_max_freq()
+        self.original_governor = get_cpu_governor()
         self.show_help = False
         
+        # Persistent Summary Logic
+        self.last_summary = self.load_last_run()
+        self.is_persistent_summary = False
+        if self.last_summary:
+            self.state = STATE_FINISHED
+            self.is_persistent_summary = True
+            # Load the files list from disk or dummy it for display
+            self.file_statuses = [{'path': 'Previous Batch', 'status': 'Completed' if i < self.last_summary['success'] else 'Failed'} for i in range(self.last_summary['total'])]
+        
         if self.cpu_throttle_enabled:
-            set_cpu_limit(CPU_LIMIT_GHZ)
+            set_cpu_throttle(self.cpu_throttle_ghz)
         
         curses.curs_set(0)
         self.stdscr.nodelay(True)
@@ -110,6 +149,35 @@ class EncoderApp:
                 if f.lower().endswith(('.mkv', '.avi', '.webm', '.mov')):
                     found.append(os.path.join(root, f))
         return sorted(found)
+
+    def save_last_run(self):
+        total = len(self.file_statuses)
+        success = sum(1 for f in self.file_statuses if f['status'] == 'Completed')
+        # Anything not 'Completed' is considered incomplete or failed
+        failed = total - success
+        self.last_summary = {
+            'total': total,
+            'success': success,
+            'failed': failed
+        }
+        with open(LAST_RUN_FILE, 'w') as f:
+            json.dump(self.last_summary, f)
+
+    def load_last_run(self):
+        if os.path.exists(LAST_RUN_FILE):
+            try:
+                with open(LAST_RUN_FILE, 'r') as f:
+                    return json.load(f)
+            except:
+                pass
+        return None
+
+    def clear_last_run(self):
+        if os.path.exists(LAST_RUN_FILE):
+            try:
+                os.remove(LAST_RUN_FILE)
+            except:
+                pass
 
     def get_duration(self, file_path):
         cmd = ['ffprobe', '-v', 'error', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', file_path]
@@ -180,9 +248,9 @@ class EncoderApp:
     def toggle_throttle(self):
         self.cpu_throttle_enabled = not self.cpu_throttle_enabled
         if self.cpu_throttle_enabled:
-            set_cpu_limit(CPU_LIMIT_GHZ)
+            set_cpu_throttle(self.cpu_throttle_ghz)
         else:
-            restore_cpu_limit(self.original_cpu_max)
+            set_cpu_full_speed(self.original_cpu_max)
 
     def draw_help_screen(self):
         h, w = self.stdscr.getmaxyx()
@@ -245,7 +313,7 @@ class EncoderApp:
                 self.stdscr.addstr(y, 2, f"{cursor}{checked} {os.path.basename(entry['path'])}")
                 y += 1
             
-            self.stdscr.addstr(h-1, 0, " 'a' Add File | 'c' Change Dir | 't' Toggle Throttle | 'h' Help | Enter Start | 'q' Quit ", curses.A_REVERSE)
+            self.stdscr.addstr(h-1, 0, " 'a' Add | 'c' Change Dir | 's' Set Speed | 't' Throttle | 'h' Help | Enter Start | 'q' Quit ", curses.A_REVERSE)
 
         elif self.state in [STATE_ENCODING, STATE_FINISHED]:
             # System Metrics
@@ -257,32 +325,56 @@ class EncoderApp:
                     if entries: temp_str = f"{entries[0].current}°C"
                     break
 
+            if self.state == STATE_FINISHED:
+                header = "Welcome Back!" if self.is_persistent_summary else "Batch Complete!"
+                self.stdscr.addstr(1, 2, header, curses.A_BOLD | curses.color_pair(1))
+                
+                if self.last_summary:
+                    total = self.last_summary['total']
+                    success = self.last_summary['success']
+                    failed = self.last_summary['failed']
+                else:
+                    total = len(self.file_statuses)
+                    success = sum(1 for f in self.file_statuses if f['status'] == 'Completed')
+                    failed = total - success
+                
+                if failed == 0:
+                    msg = f"[SUCCESS] All {total} files were encoded successfully!"
+                    self.stdscr.addstr(3, 2, msg, curses.color_pair(1) | curses.A_BOLD)
+                else:
+                    msg = f"[COMPLETED] Batch finished! {success} succeeded, but {failed} file(s) were incomplete or failed."
+                    self.stdscr.addstr(3, 2, msg, curses.color_pair(2) | curses.A_BOLD)
+
             status_text = "FINISHED" if self.state == STATE_FINISHED else ("PAUSED" if self.paused else f"RUNNING ({throttle_info})")
-            self.stdscr.addstr(2, 2, f"CPU Freq: {cpu_freq/1000:.2f} GHz", curses.color_pair(3))
-            self.stdscr.addstr(2, 25, f"CPU Temp: {temp_str}", curses.color_pair(2))
-            self.stdscr.addstr(2, 45, f"Status: {status_text}")
+            # Move system metrics down if in FINISHED state to avoid overlap
+            metrics_y = 5 if self.state == STATE_FINISHED else 2
+            self.stdscr.addstr(metrics_y, 2, f"CPU Freq: {cpu_freq/1000:.2f} GHz", curses.color_pair(3))
+            self.stdscr.addstr(metrics_y, 25, f"CPU Temp: {temp_str}", curses.color_pair(2))
+            self.stdscr.addstr(metrics_y, 45, f"Status: {status_text}")
             
             # Progress Bars
-            total_selected = len(self.file_statuses)
-            overall_prog = self.current_idx / total_selected if total_selected > 0 else 1
-            self.draw_progress_bar(4, 2, 40, overall_prog, "Overall", 1)
-            self.stdscr.addstr(4, 60, f"({self.current_idx}/{total_selected} COMPLETED)")
-            
-            # Current file progress
-            self.draw_progress_bar(6, 2, 40, self.progress_data['progress'], "Current", 1)
-            self.stdscr.addstr(6, 60, f"ETA: {self.progress_data['eta']}")
-            self.stdscr.addstr(6, 75, f"Speed: {self.progress_data['speed']}")
-            
-            # Files List
-            y = 8
-            self.stdscr.addstr(y, 2, "Encoding Queue:", curses.A_UNDERLINE)
-            y += 1
-            for i, entry in enumerate(self.file_statuses):
-                if y >= h - 2: break
-                color = curses.color_pair(1) if entry['status'] == 'Completed' else \
-                        curses.color_pair(2) if entry['status'] == 'Encoding' else 0
-                self.stdscr.addstr(y, 4, f"[{entry['status']}] {os.path.basename(entry['path'])}", color)
+            if not self.is_persistent_summary:
+                pb_start_y = 7 if self.state == STATE_FINISHED else 4
+                total_selected = len(self.file_statuses)
+                overall_prog = self.current_idx / total_selected if total_selected > 0 else 1
+                self.draw_progress_bar(pb_start_y, 2, 40, overall_prog, "Overall", 1)
+                self.stdscr.addstr(pb_start_y, 60, f"({self.current_idx}/{total_selected} COMPLETED)")
+                
+                # Current file progress
+                self.draw_progress_bar(pb_start_y + 2, 2, 40, self.progress_data['progress'], "Current", 1)
+                self.stdscr.addstr(pb_start_y + 2, 60, f"ETA: {self.progress_data['eta']}")
+                self.stdscr.addstr(pb_start_y + 2, 75, f"Speed: {self.progress_data['speed']}")
+                
+                # Files List
+                y = pb_start_y + 4
+                self.stdscr.addstr(y, 2, "Encoding Queue:", curses.A_UNDERLINE)
                 y += 1
+                for i, entry in enumerate(self.file_statuses):
+                    if y >= h - 2: break
+                    color = curses.color_pair(1) if entry['status'] == 'Completed' else \
+                            curses.color_pair(2) if entry['status'] == 'Encoding' else 0
+                    self.stdscr.addstr(y, 4, f"[{entry['status']}] {os.path.basename(entry['path'])}", color)
+                    y += 1
             
             if self.state == STATE_ENCODING:
                 self.stdscr.addstr(h-1, 0, " 'p' Pause | 'r' Resume | 't' Toggle Throttle | 'h' Help | 'q' Quit ", curses.A_REVERSE)
@@ -337,6 +429,15 @@ class EncoderApp:
                             self.file_statuses = [{'path': f, 'status': 'Pending', 'duration': 0, 'selected': True} for f in self.files]
                             self.cursor_idx = 0
                             self.current_idx = 0
+                    elif key == ord('s'):
+                        new_speed = self.get_input("Set Throttle Speed (GHz)")
+                        try:
+                            val = float(new_speed)
+                            self.cpu_throttle_ghz = val
+                            config['cpu_limit_ghz'] = val
+                            save_config(config)
+                        except:
+                            pass
                     elif key in [10, 13]: # Enter
                         selected_files = [f for f in self.file_statuses if f['selected']]
                         if selected_files:
@@ -356,9 +457,14 @@ class EncoderApp:
                         self.process_file()
                     elif self.current_idx >= len(self.file_statuses):
                         self.state = STATE_FINISHED
+                        self.save_last_run()
+                        self.is_persistent_summary = False
                 
                 elif self.state == STATE_FINISHED:
                     if key == ord('m'):
+                        self.clear_last_run()
+                        self.last_summary = None
+                        self.is_persistent_summary = False
                         self.state = STATE_SELECTING
                         # Re-scan and preserve status for display? No, reset for new batch
                         self.files = self.scan_files(self.input_dir)
@@ -370,10 +476,12 @@ class EncoderApp:
                 self.draw()
                 time.sleep(0.1)
         finally:
+            if self.state == STATE_ENCODING:
+                self.save_last_run()
             if self.process:
                 try: self.process.kill()
                 except: pass
-            restore_cpu_limit(self.original_cpu_max)
+            restore_cpu_state(self.original_governor, self.original_cpu_max)
 
     def process_file(self):
         file_path = self.file_statuses[self.current_idx]['path']

@@ -13,7 +13,7 @@ from datetime import timedelta, datetime
 # --- Configuration ---
 VERSION = "2.2.2"
 CONFIG_DIR = os.path.expanduser('~/.config/DLNAencoder')
-LOG_DIR = os.path.join(CONFIG_DIR, 'logs')
+LOG_DIR = os.path.expanduser('~/.config/DLNAencoder/logs')
 os.makedirs(LOG_DIR, exist_ok=True)
 CONFIG_FILE = os.path.join(CONFIG_DIR, 'config.json')
 LAST_RUN_FILE = os.path.join(CONFIG_DIR, 'last_run.json')
@@ -133,6 +133,7 @@ class EncoderApp:
         self.paused = False
         self.running = True
         self.process = None
+        self.log_file = None
         self.progress_data = {'progress': 0, 'eta': 'N/A', 'speed': 'N/A'}
         self.cpu_throttle_enabled = CPU_THROTTLE_ENABLED
         self.cpu_throttle_ghz = CPU_LIMIT_GHZ
@@ -314,12 +315,20 @@ class EncoderApp:
         for i in range(box_h):
             self.stdscr.addstr(start_y + i, start_x, " " * box_w, curses.A_REVERSE)
         
+        # If no specific log is set, try to find the most recent one
+        if not self.log_file or not os.path.exists(os.path.join(LOG_DIR, self.log_file)):
+            logs = sorted([f for f in os.listdir(LOG_DIR) if f.endswith('.log')], key=lambda f: os.path.getmtime(os.path.join(LOG_DIR, f)), reverse=True)
+            if logs:
+                self.log_file = logs[0]
+        
         self.stdscr.addstr(start_y + 1, start_x + 2, f"--- Error Log: {self.log_file if self.log_file else 'None'} ---", curses.A_REVERSE | curses.A_BOLD)
         
         if self.log_file and os.path.exists(os.path.join(LOG_DIR, self.log_file)):
             with open(os.path.join(LOG_DIR, self.log_file), 'r') as f:
-                lines = f.readlines()[- (box_h - 4):]
-                for i, line in enumerate(lines):
+                lines = f.readlines()
+                # Display the last few lines that fit in the box
+                display_lines = lines[-(box_h - 4):]
+                for i, line in enumerate(display_lines):
                     self.stdscr.addstr(start_y + 3 + i, start_x + 2, line.strip()[:box_w-4], curses.A_REVERSE)
         else:
             self.stdscr.addstr(start_y + 3, start_x + 2, "No error log found.", curses.A_REVERSE)
@@ -540,6 +549,16 @@ class EncoderApp:
         log_name = f"{os.path.basename(file_path)}.log"
 
         if not self.process:
+            # Check if file exists before processing
+            if not os.path.exists(file_path):
+                self.file_statuses[self.current_idx]['status'] = 'Failed'
+                self.log_file = log_name
+                timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                with open(os.path.join(LOG_DIR, log_name), 'a') as f:
+                    f.write(f"[{timestamp}] Encoding Failed:\nError: Input file does not exist: {file_path}\n")
+                self.current_idx += 1
+                return
+
             self.file_statuses[self.current_idx]['status'] = 'Encoding'
             self.file_statuses[self.current_idx]['duration'] = self.get_duration(file_path)
             if os.path.exists(PROGRESS_FILE): os.remove(PROGRESS_FILE)
@@ -547,10 +566,8 @@ class EncoderApp:
             cmd = ['ffmpeg', '-y', '-hide_banner', '-loglevel', 'error', '-progress', PROGRESS_FILE]
             cmd.extend(['-i', file_path])
             if hw_accel == 'nvenc':
-                # NVENC uses -preset p[1-7] (p6 is a good 'fast' default)
                 cmd.extend(['-c:v', 'h264_nvenc', '-preset', 'p6'])
             elif hw_accel == 'vaapi':
-                # VAAPI doesn't typically use -preset
                 cmd.extend(['-c:v', 'h264_vaapi'])
             else:
                 cmd.extend(['-c:v', 'libx264', '-preset', 'veryfast'])
@@ -575,8 +592,11 @@ class EncoderApp:
                 self.file_statuses[self.current_idx]['status'] = 'Failed'
                 self.log_file = log_name
                 timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                with open(os.path.join(LOG_DIR, log_name), 'w') as f:
-                    f.write(f"[{timestamp}] Encoding Failed:\n{stderr.decode()}")
+                # Ensure directory exists just in case
+                os.makedirs(LOG_DIR, exist_ok=True)
+                with open(os.path.join(LOG_DIR, log_name), 'a') as f:
+                    reason = "Encoding Interrupted" if self.process.returncode < 0 else "Encoder Error"
+                    f.write(f"[{timestamp}] {reason} (Code {self.process.returncode}):\n{stderr.decode()}\n")
                 if os.path.exists(temp_out):
                     try: os.remove(temp_out)
                     except: pass

@@ -11,10 +11,25 @@ import shutil
 from datetime import timedelta
 
 # --- Configuration ---
-VERSION = "2.2.1"
+VERSION = "2.2.2"
 CONFIG_DIR = os.path.expanduser('~/.config/DLNAencoder')
+LOG_DIR = os.path.join(CONFIG_DIR, 'logs')
+os.makedirs(LOG_DIR, exist_ok=True)
 CONFIG_FILE = os.path.join(CONFIG_DIR, 'config.json')
 LAST_RUN_FILE = os.path.join(CONFIG_DIR, 'last_run.json')
+
+def detect_hw_accel():
+    try:
+        output = subprocess.check_output(['ffmpeg', '-encoders'], stderr=subprocess.DEVNULL).decode()
+        if 'nvenc' in output:
+            return 'nvenc'
+        if 'vaapi' in output:
+            return 'vaapi'
+    except:
+        pass
+    return None
+
+hw_accel = detect_hw_accel()
 
 def get_cpu_max_freq():
     """Reads the hardware maximum frequency in KHz."""
@@ -121,6 +136,8 @@ class EncoderApp:
         self.original_cpu_max = get_cpu_max_freq()
         self.original_governor = get_cpu_governor()
         self.show_help = False
+        self.show_logs = False
+        self.log_file = None
         
         # Persistent Summary Logic
         self.last_summary = self.load_last_run()
@@ -286,6 +303,26 @@ class EncoderApp:
         
         self.stdscr.addstr(start_y + box_h - 2, start_x + 2, "Press 'h' to close", curses.A_REVERSE | curses.A_ITALIC)
 
+    def draw_log_viewer(self):
+        h, w = self.stdscr.getmaxyx()
+        box_h, box_w = h - 4, w - 4
+        start_y, start_x = 2, 2
+        
+        for i in range(box_h):
+            self.stdscr.addstr(start_y + i, start_x, " " * box_w, curses.A_REVERSE)
+        
+        self.stdscr.addstr(start_y + 1, start_x + 2, f"--- Error Log: {self.log_file if self.log_file else 'None'} ---", curses.A_REVERSE | curses.A_BOLD)
+        
+        if self.log_file and os.path.exists(os.path.join(LOG_DIR, self.log_file)):
+            with open(os.path.join(LOG_DIR, self.log_file), 'r') as f:
+                lines = f.readlines()[- (box_h - 4):]
+                for i, line in enumerate(lines):
+                    self.stdscr.addstr(start_y + 3 + i, start_x + 2, line.strip()[:box_w-4], curses.A_REVERSE)
+        else:
+            self.stdscr.addstr(start_y + 3, start_x + 2, "No error log found.", curses.A_REVERSE)
+        
+        self.stdscr.addstr(start_y + box_h - 2, start_x + 2, "Press 'l' to close", curses.A_REVERSE | curses.A_ITALIC)
+
     def draw(self):
         self.stdscr.erase()
         h, w = self.stdscr.getmaxyx()
@@ -313,7 +350,7 @@ class EncoderApp:
                 self.stdscr.addstr(y, 2, f"{cursor}{checked} {os.path.basename(entry['path'])}")
                 y += 1
             
-            self.stdscr.addstr(h-1, 0, " 'a' Add | 'c' Change Dir | 's' Set Speed | 't' Throttle | 'h' Help | Enter Start | 'q' Quit ", curses.A_REVERSE)
+            self.stdscr.addstr(h-1, 0, " 'a' Add | 'c' Change Dir | 's' Set Speed | 't' Throttle | 'h' Help | 'l' Logs | Enter Start | 'q' Quit ", curses.A_REVERSE)
 
         elif self.state in [STATE_ENCODING, STATE_FINISHED]:
             # System Metrics
@@ -383,6 +420,9 @@ class EncoderApp:
 
         if self.show_help:
             self.draw_help_screen()
+        
+        if self.show_logs:
+            self.draw_log_viewer()
 
         self.stdscr.refresh()
 
@@ -403,6 +443,8 @@ class EncoderApp:
                     self.toggle_throttle()
                 elif key == ord('h'):
                     self.show_help = not self.show_help
+                elif key == ord('l'):
+                    self.show_logs = not self.show_logs
                 
                 if self.state == STATE_SELECTING:
                     if key == curses.KEY_UP:
@@ -486,17 +528,28 @@ class EncoderApp:
     def process_file(self):
         file_path = self.file_statuses[self.current_idx]['path']
         temp_out = os.path.join(TEMP_DIR, f"{os.path.basename(file_path)}_tmp.mp4")
+        log_name = f"{os.path.basename(file_path)}.log"
 
         if not self.process:
             self.file_statuses[self.current_idx]['status'] = 'Encoding'
             self.file_statuses[self.current_idx]['duration'] = self.get_duration(file_path)
             if os.path.exists(PROGRESS_FILE): os.remove(PROGRESS_FILE)
-            cmd = ['ffmpeg', '-y', '-hide_banner', '-loglevel', 'error', '-progress', PROGRESS_FILE, '-i', file_path, '-c:v', 'libx264', '-crf', '23', '-preset', 'veryfast', temp_out]
-            self.process = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            
+            cmd = ['ffmpeg', '-y', '-hide_banner', '-loglevel', 'error', '-progress', PROGRESS_FILE]
+            if hw_accel == 'nvenc':
+                cmd.extend(['-c:v', 'h264_nvenc'])
+            elif hw_accel == 'vaapi':
+                cmd.extend(['-c:v', 'h264_vaapi'])
+            else:
+                cmd.extend(['-c:v', 'libx264'])
+            
+            cmd.extend(['-crf', '23', '-preset', 'veryfast', '-i', file_path, temp_out])
+            self.process = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
             
         self.update_progress(self.file_statuses[self.current_idx]['duration'])
             
         if self.process.poll() is not None:
+            _, stderr = self.process.communicate()
             if self.process.returncode == 0 and os.path.exists(temp_out) and os.path.getsize(temp_out) > 0:
                 final_out = os.path.splitext(file_path)[0] + ".mp4"
                 try:
@@ -508,6 +561,9 @@ class EncoderApp:
                     self.file_statuses[self.current_idx]['status'] = 'Error'
             else:
                 self.file_statuses[self.current_idx]['status'] = 'Failed'
+                self.log_file = log_name
+                with open(os.path.join(LOG_DIR, log_name), 'w') as f:
+                    f.write(stderr.decode())
                 if os.path.exists(temp_out):
                     try: os.remove(temp_out)
                     except: pass

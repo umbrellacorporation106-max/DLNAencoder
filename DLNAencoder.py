@@ -294,7 +294,7 @@ class EncoderApp:
             ("Selection:", ""),
             ("  Arrows", "Navigate Files"),
             ("  Space", "Toggle Selection"),
-            ("  a / c", "Add Path / Change Dir"),
+            ("  a / c / s", "Add / Change Dir / Speed"),
             ("  Enter", "Start Encoding"),
             ("", ""),
             ("Encoding:", ""),

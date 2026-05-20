@@ -8,7 +8,7 @@ import psutil
 import signal
 import time
 import shutil
-from datetime import timedelta
+from datetime import timedelta, datetime
 
 # --- Configuration ---
 VERSION = "2.2.2"
@@ -19,14 +19,17 @@ CONFIG_FILE = os.path.join(CONFIG_DIR, 'config.json')
 LAST_RUN_FILE = os.path.join(CONFIG_DIR, 'last_run.json')
 
 def detect_hw_accel():
-    try:
-        output = subprocess.check_output(['ffmpeg', '-encoders'], stderr=subprocess.DEVNULL).decode()
-        if 'nvenc' in output:
-            return 'nvenc'
-        if 'vaapi' in output:
-            return 'vaapi'
-    except:
-        pass
+    """Proactively test if hardware encoders can actually be initialized."""
+    for codec in ['h264_nvenc', 'h264_vaapi']:
+        try:
+            # Try to run a dummy encoding test to check if the encoder is functional
+            # -f null - allows us to test the encoder without creating a file
+            subprocess.run(['ffmpeg', '-f', 'lavfi', '-i', 'testsrc=size=64x64:rate=1', 
+                            '-c:v', codec, '-f', 'null', '-'], 
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+            return codec.split('_')[1] # returns 'nvenc' or 'vaapi'
+        except subprocess.CalledProcessError:
+            continue
     return None
 
 hw_accel = detect_hw_accel()
@@ -350,7 +353,10 @@ class EncoderApp:
                 self.stdscr.addstr(y, 2, f"{cursor}{checked} {os.path.basename(entry['path'])}")
                 y += 1
             
-            self.stdscr.addstr(h-1, 0, " 'a' Add | 'c' Change Dir | 's' Set Speed | 't' Throttle | 'h' Help | 'l' Logs | Enter Start | 'q' Quit ", curses.A_REVERSE)
+            # Use a slightly safer boundary to avoid _curses.error
+            footer = " 'a' Add | 'c' Dir | 's' Speed | 't' Throttle | 'h' Help | 'l' Logs | Enter Start | 'q' Quit "
+            if len(footer) < w:
+                self.stdscr.addstr(h-1, 0, footer[:w-1], curses.A_REVERSE)
 
         elif self.state in [STATE_ENCODING, STATE_FINISHED]:
             # System Metrics
@@ -414,9 +420,12 @@ class EncoderApp:
                     y += 1
             
             if self.state == STATE_ENCODING:
-                self.stdscr.addstr(h-1, 0, " 'p' Pause | 'r' Resume | 't' Toggle Throttle | 'h' Help | 'q' Quit ", curses.A_REVERSE)
+                footer = " 'p' Pause | 'r' Resume | 't' Toggle Throttle | 'h' Help | 'l' Logs | 'q' Quit "
             else:
-                self.stdscr.addstr(h-1, 0, " 'm' Menu | 't' Toggle Throttle | 'h' Help | 'q' Quit ", curses.A_REVERSE)
+                footer = " 'm' Menu | 't' Toggle Throttle | 'h' Help | 'l' Logs | 'q' Quit "
+            if len(footer) < w:
+                self.stdscr.addstr(h-1, 0, footer[:w-1], curses.A_REVERSE)
+
 
         if self.show_help:
             self.draw_help_screen()
@@ -536,14 +545,17 @@ class EncoderApp:
             if os.path.exists(PROGRESS_FILE): os.remove(PROGRESS_FILE)
             
             cmd = ['ffmpeg', '-y', '-hide_banner', '-loglevel', 'error', '-progress', PROGRESS_FILE]
+            cmd.extend(['-i', file_path])
             if hw_accel == 'nvenc':
-                cmd.extend(['-c:v', 'h264_nvenc'])
+                # NVENC uses -preset p[1-7] (p6 is a good 'fast' default)
+                cmd.extend(['-c:v', 'h264_nvenc', '-preset', 'p6'])
             elif hw_accel == 'vaapi':
+                # VAAPI doesn't typically use -preset
                 cmd.extend(['-c:v', 'h264_vaapi'])
             else:
-                cmd.extend(['-c:v', 'libx264'])
+                cmd.extend(['-c:v', 'libx264', '-preset', 'veryfast'])
             
-            cmd.extend(['-crf', '23', '-preset', 'veryfast', '-i', file_path, temp_out])
+            cmd.extend(['-crf', '23', temp_out])
             self.process = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
             
         self.update_progress(self.file_statuses[self.current_idx]['duration'])
@@ -562,8 +574,9 @@ class EncoderApp:
             else:
                 self.file_statuses[self.current_idx]['status'] = 'Failed'
                 self.log_file = log_name
+                timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 with open(os.path.join(LOG_DIR, log_name), 'w') as f:
-                    f.write(stderr.decode())
+                    f.write(f"[{timestamp}] Encoding Failed:\n{stderr.decode()}")
                 if os.path.exists(temp_out):
                     try: os.remove(temp_out)
                     except: pass
